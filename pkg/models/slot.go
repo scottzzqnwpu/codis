@@ -206,6 +206,20 @@ func (s *Slot) SetMigrateStatus(zkConn zkhelper.Conn, fromGroup, toGroup int) er
 	return s.Update(zkConn)
 }
 
+func (s *Slot) SetPreMigrateStatus(zkConn zkhelper.Conn, fromGroup, toGroup int) error {
+	if fromGroup < 0 || toGroup < 0 {
+		return errors.Errorf("invalid group id, from %d, to %d", fromGroup, toGroup)
+	}
+
+	// skip pre_migrate if slot is already migrating
+	if s.State.Status != SLOT_STATUS_MIGRATE {
+		s.State.Status = SLOT_STATUS_PRE_MIGRATE
+		err := s.Update(zkConn)
+		return err
+	}
+	return errors.Errorf("invalid state")
+}
+
 func (s *Slot) Update(zkConn zkhelper.Conn) error {
 	// status validation
 	switch s.State.Status {

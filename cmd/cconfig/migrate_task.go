@@ -33,6 +33,18 @@ type SlotMigrateProgress struct {
 	Remain    int `json:"remain"`
 }
 
+type MigrateInfo struct {
+ 	Bgsaving           			    int      `json:"bgsaving"`
+ 	Sync_db_file       			    int      `json:"sync_db_file"` 
+ 	Slot                            int      `json:"slot"`
+ 	Slave_ip_port                   string   `json:"slave_ip_port"`
+ 	Master_slot_binlog_filenum      int      `json:"master_slot_binlog_filenum"`
+ 	Master_slot_binlog_con_offset   int      `json:"master_slot_binlog_con_offset"`
+ 	Slave_slot_binlog_filenum       int      `json:"slave_slot_binlog_filenum"`
+ 	Slave_slot_binlog_con_offset    int      `json:"slave_slot_binlog_con_offset"`
+}
+
+
 func (p SlotMigrateProgress) String() string {
 	return fmt.Sprintf("migrate Slot: slot_%d From: group_%d To: group_%d remain: %d keys", p.SlotId, p.FromGroup, p.ToGroup, p.Remain)
 }
@@ -104,10 +116,10 @@ func (t *MigrateTask) migrateSingleSlot(slotId int, to int) error {
 	}
 
 	// modify slot status
-	if err := s.SetMigrateStatus(t.zkConn, from, to); err != nil {
-		log.ErrorErrorf(err, "set migrate status failed")
-		return err
-	}
+	//if err := s.SetMigrateStatus(t.zkConn, from, to); err != nil {
+	//	log.ErrorErrorf(err, "set migrate status failed")
+	//	return err
+	//}
 
 	err = t.Migrate(s, from, to, func(p SlotMigrateProgress) {
 		// on migrate slot progress
@@ -193,28 +205,92 @@ func (task *MigrateTask) Migrate(slot *models.Slot, fromGroup, toGroup int, onPr
 
 	defer c.Close()
 
-	_, remain, err := utils.SlotsMgrtTagSlot(c, slot.Id, toMaster.Addr)
+	to, err := utils.DialTo(toMaster.Addr, globalEnv.Password())
 	if err != nil {
 		return err
 	}
 
-	for remain > 0 {
-		if task.Delay > 0 {
-			time.Sleep(time.Duration(task.Delay) * time.Millisecond)
-		}
-		_, remain, err = utils.SlotsMgrtTagSlot(c, slot.Id, toMaster.Addr)
-		if remain >= 0 {
-			onProgress(SlotMigrateProgress{
-				SlotId:    slot.Id,
-				FromGroup: fromGroup,
-				ToGroup:   toGroup,
-				Remain:    remain,
-			})
-		}
+	defer to.Close()
+
+	//1. send toMaster migrateslot command
+	_, err = utils.MigrateSlot(to, slot.Id, fromMaster.Addr)
+	if err != nil{
+		return err
+	}
+	//2. get slot migrate info from fromMaster
+	//{
+	//	"bgsaving": 0, 
+	//	"sync_db_file": 1, 
+	//	"slot": 0, 
+	//	"slave_ip_port": "", 
+	//	"master_slot_binlog_filenum": -1, 
+	//	"master_slot_binlog_con_offset": -1, 
+	//	"slave_slot_binlog_filenum": -1, 
+	//	"slave_slot_binlog_con_offset": -1 
+	//}
+	for {
+		reply, err := utils.MasterMigrateInfo(c)
+		log.Infof("reply;%+v", reply)
+
+		var info MigrateInfo
+		err = json.Unmarshal([]byte(reply), &info)
 		if err != nil {
 			return err
 		}
+		if info.Bgsaving == 1{
+			if info.Sync_db_file == 0 {
+				if info.Slot == slot.Id {
+					if info.Master_slot_binlog_filenum == info.Master_slot_binlog_con_offset && info.Master_slot_binlog_filenum >= 0 {
+						if info.Slave_slot_binlog_filenum == info.Slave_slot_binlog_con_offset && info.Slave_slot_binlog_filenum >= 0 {
+							err = slot.SetPreMigrateStatus(task.zkConn, fromGroup, toGroup)
+							if err != nil {
+								return err
+							}
+							_, err = utils.FinishMigrateSlot(c, slot.Id)
+							if err == nil {
+								log.Infof("Finish Migrate Slot %d", slot.Id)
+								break
+							}
+						}
+					}else {
+						log.Infof("Wait rsync SlotBinlog")
+					}
+				}else{
+					log.Warnf("Slot Id Error, info_id:%d current_id:%d", info.Slot, slot.Id)
+				}
+			}else{
+				log.Infof("Dump or rsync DB")
+			}
+		}else{
+			log.Infof("Not start migrate")
+		}
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 	}
+	//3. set premigrate status
+
+	//4. when db and slotbinlog send finish, send finishmigrateslot to fromMaster
+
+	//_, remain, err := utils.SlotsMgrtTagSlot(c, slot.Id, toMaster.Addr)
+	//if err != nil {
+	//	return err
+	//}
+	//for remain > 0 {
+	//	if task.Delay > 0 {
+	//		time.Sleep(time.Duration(task.Delay) * time.Millisecond)
+	//	}
+	//	_, remain, err = utils.SlotsMgrtTagSlot(c, slot.Id, toMaster.Addr)
+	//	if remain >= 0 {
+	//		onProgress(SlotMigrateProgress{
+	//			SlotId:    slot.Id,
+	//			FromGroup: fromGroup,
+	//			ToGroup:   toGroup,
+	//			Remain:    remain,
+	//		})
+	//	}
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 	return nil
 }
 

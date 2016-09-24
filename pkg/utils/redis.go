@@ -85,6 +85,35 @@ func SlotsMgrtTagSlot(c redis.Conn, slotId int, toAddr string) (int, int, error)
 	}
 }
 
+func MigrateSlot(c redis.Conn, slotId int, fromAddr string) (int, error) {
+	addrParts := strings.Split(fromAddr, ":")
+	if len(addrParts) != 2 {
+		return -1, errors.Trace(ErrInvalidAddr)
+	}
+
+	_, err := c.Do("MIGRATESLOT", addrParts[0], addrParts[1], slotId)
+	if err != nil {
+		return -1, errors.Trace(err)
+	}
+	return 0, nil
+}
+
+func MasterMigrateInfo(c redis.Conn) (string, error) {
+	reply, err := redis.String(c.Do("MASTERMIGRATEINFO"))
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return reply, nil
+}
+
+func FinishMigrateSlot(c redis.Conn, slotId int) (int, error) {
+	_, err := c.Do("FINISHMIGRATESLOT", slotId)
+	if err != nil {
+		return -1, errors.Trace(err)
+	}
+	return 0, nil
+}
+
 func GetRedisStat(addr, passwd string) (map[string]string, error) {
 	c, err := DialTo(addr, passwd)
 	if err != nil {

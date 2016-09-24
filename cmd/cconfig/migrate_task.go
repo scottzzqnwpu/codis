@@ -136,6 +136,7 @@ func (t *MigrateTask) migrateSingleSlot(slotId int, to int) error {
 	s.State.Status = models.SLOT_STATUS_ONLINE
 	s.State.MigrateStatus.From = models.INVALID_ID
 	s.State.MigrateStatus.To = models.INVALID_ID
+	s.GroupId = to
 	if err := s.Update(t.zkConn); err != nil {
 		log.ErrorErrorf(err, "update zk status failed, should be: %+v", s)
 		return err
@@ -240,8 +241,8 @@ func (task *MigrateTask) Migrate(slot *models.Slot, fromGroup, toGroup int, onPr
 		if info.Bgsaving == 1{
 			if info.Sync_db_file == 0 {
 				if info.Slot == slot.Id {
-					if info.Master_slot_binlog_filenum == info.Master_slot_binlog_con_offset && info.Master_slot_binlog_filenum >= 0 {
-						if info.Slave_slot_binlog_filenum == info.Slave_slot_binlog_con_offset && info.Slave_slot_binlog_filenum >= 0 {
+					if info.Master_slot_binlog_filenum == info.Slave_slot_binlog_filenum&& info.Master_slot_binlog_filenum >= 0 {
+						if info.Master_slot_binlog_con_offset == info.Slave_slot_binlog_con_offset && info.Master_slot_binlog_con_offset >= 0 {
 							err = slot.SetPreMigrateStatus(task.zkConn, fromGroup, toGroup)
 							if err != nil {
 								return err
@@ -251,20 +252,23 @@ func (task *MigrateTask) Migrate(slot *models.Slot, fromGroup, toGroup int, onPr
 								log.Infof("Finish Migrate Slot %d", slot.Id)
 								break
 							}
+
 						}
 					}else {
 						log.Infof("Wait rsync SlotBinlog")
 					}
 				}else{
 					log.Warnf("Slot Id Error, info_id:%d current_id:%d", info.Slot, slot.Id)
+					time.Sleep(time.Duration(1000) * time.Millisecond)
 				}
 			}else{
 				log.Infof("Dump or rsync DB")
+				time.Sleep(time.Duration(1000) * time.Millisecond)
 			}
 		}else{
 			log.Infof("Not start migrate")
+			time.Sleep(time.Duration(1000) * time.Millisecond)
 		}
-		time.Sleep(time.Duration(1000) * time.Millisecond)
 	}
 	//3. set premigrate status
 
